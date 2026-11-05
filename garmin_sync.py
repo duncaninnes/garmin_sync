@@ -1,10 +1,12 @@
-"""Sync Garmin Index scale weigh-ins into the "Health Metrics & Diet Log" Google Sheet.
+"""Sync Garmin Index scale weigh-ins into a Google Sheet.
 
 Writes one row per day: the first weigh-in of that day (London time). Later
 weigh-ins on a day that already has a row are skipped.
 
-Credentials are read from environment variables or a .env file, never from this file:
+Settings are read from environment variables or a .env file, never from this file:
   GARMIN_EMAIL, GARMIN_PASSWORD   - Garmin Connect login
+  SPREADSHEET_NAME                - name of the Google spreadsheet
+  WORKSHEET_NAME                  - name of the tab to write to
   GOOGLE_JSON_PATH (optional)     - service account JSON (default /config/google_creds.json)
 """
 
@@ -27,8 +29,8 @@ GARMIN_PASSWORD = os.environ.get("GARMIN_PASSWORD")
 
 # 2. Google Sheets setup
 GOOGLE_JSON_PATH = os.environ.get("GOOGLE_JSON_PATH", "/config/google_creds.json")
-SPREADSHEET_NAME = "Health Metrics & Diet Log"
-WORKSHEET_NAME = "Weight"
+SPREADSHEET_NAME = os.environ.get("SPREADSHEET_NAME")
+WORKSHEET_NAME = os.environ.get("WORKSHEET_NAME")
 
 LOCAL_TZ = zoneinfo.ZoneInfo("Europe/London")
 DAYS_BACK = 3  # today plus the previous 3 days
@@ -80,8 +82,9 @@ def metric(log, key, divisor=1):
 
 
 def main():
-    if not GARMIN_EMAIL or not GARMIN_PASSWORD:
-        print("Error: set GARMIN_EMAIL and GARMIN_PASSWORD environment variables.")
+    if not all((GARMIN_EMAIL, GARMIN_PASSWORD, SPREADSHEET_NAME, WORKSHEET_NAME)):
+        print("Error: set GARMIN_EMAIL, GARMIN_PASSWORD, SPREADSHEET_NAME and "
+              "WORKSHEET_NAME environment variables.")
         sys.exit(1)
 
     try:

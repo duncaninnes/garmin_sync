@@ -2,7 +2,7 @@
 
 A Python script that copies weigh-ins from Garmin Connect, such as those from a Garmin Index scale, into a Google Sheet.
 
-Each run logs in to Garmin Connect, fetches weigh-ins for today and the previous three days, and adds any missing days to the "Weight" tab of a spreadsheet called "Health Metrics & Diet Log". It's safe to run repeatedly, because days already in the sheet are skipped.
+Each run logs in to Garmin Connect, fetches weigh-ins for today and the previous three days, and adds any missing days to the spreadsheet tab you choose in your settings. It's safe to run repeatedly, because days already in the sheet are skipped.
 
 ## What it writes
 
@@ -47,7 +47,7 @@ Because it only looks back three days, a weigh-in older than that isn't added if
 - Python 3.12 or newer
 - A Garmin Connect account
 - A Google Cloud service account with the Google Sheets and Google Drive APIs enabled, and its JSON key file
-- The "Health Metrics & Diet Log" spreadsheet, with a "Weight" tab, shared with the service account's email address
+- A Google spreadsheet with a tab for the weigh-ins, shared with the service account's email address
 
 ## Setup
 
@@ -63,6 +63,8 @@ Because it only looks back three days, a weigh-in older than that isn't added if
    |---|---|
    | `GARMIN_EMAIL` | Garmin Connect email |
    | `GARMIN_PASSWORD` | Garmin Connect password |
+   | `SPREADSHEET_NAME` | Name of the Google spreadsheet |
+   | `WORKSHEET_NAME` | Name of the tab to write to |
    | `GOOGLE_JSON_PATH` | Path to the service account key. Optional, and defaults to `/config/google_creds.json` |
 
    Variables already set in the environment take priority over `.env`.
@@ -80,4 +82,4 @@ The script prints what it wrote or skipped, and exits with status 1 if the sync 
 ## Limitations
 
 - **Two-step verification:** the script has no way to enter a code, so an unattended login may fail if it's turned on for your Garmin account.
-- **Fixed names and time zone:** the spreadsheet name, tab name and time zone are set near the top of `garmin_sync.py`.
+- **Fixed time zone:** the time zone is set near the top of `garmin_sync.py`.
