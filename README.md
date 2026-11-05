@@ -12,7 +12,7 @@ Each new row uses these columns:
 |---|---|
 | A | Date and time of the weigh-in, in London time |
 | B | Weight (kg) |
-| C | Your own formula, copied from the row above and never overwritten by the sync |
+| C | Formula for the change in weight since the row above, for example `=IF(ISBLANK(B36:B37),"",B37-B36)` in row 37. Left empty in row 2, which has no earlier weight |
 | D | BMI |
 | E | Body fat (%) |
 | F | Muscle mass (kg) |

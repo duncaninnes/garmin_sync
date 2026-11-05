@@ -143,16 +143,19 @@ def main():
 
                 new_row = next_row
 
-                # Write A:B and D:I separately so the formula in column C is never touched
+                # Column C: change in weight since the row above. Row 2 has no earlier
+                # weight to compare with, only the header, so its cell stays empty.
+                weight_change = ""
+                if new_row > 2:
+                    prev = new_row - 1
+                    weight_change = f'=IF(ISBLANK(B{prev}:B{new_row}),"",B{new_row}-B{prev})'
+
                 sheet.batch_update(
                     [
                         {
-                            "range": f"A{new_row}:B{new_row}",
-                            "values": [[standard_timestamp, weight_kg]],
-                        },
-                        {
-                            "range": f"D{new_row}:I{new_row}",
-                            "values": [[bmi, body_fat, muscle_mass_kg,
+                            "range": f"A{new_row}:I{new_row}",
+                            "values": [[standard_timestamp, weight_kg, weight_change,
+                                        bmi, body_fat, muscle_mass_kg,
                                         bone_mass_kg, body_water, routine_text]],
                         },
                     ],
@@ -160,16 +163,13 @@ def main():
                 )
                 print(f"Wrote row {new_row} for {standard_timestamp}")
 
-                # Copy formatting, and the column C formula, from the row above
+                # Copy formatting from the row above
                 if new_row > 2:
-                    prev = new_row - 1
                     try:
                         sheet.copy_range(f"A{prev}:I{prev}", f"A{new_row}:I{new_row}",
                                          paste_type="PASTE_FORMAT")
-                        sheet.copy_range(f"C{prev}", f"C{new_row}",
-                                         paste_type="PASTE_FORMULA")
                     except Exception as fmt_err:
-                        print(f"Note: format/formula copy skipped: {fmt_err}")
+                        print(f"Note: format copy skipped: {fmt_err}")
 
                 existing_days.add(local_dt.date())
                 next_row += 1
