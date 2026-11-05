@@ -1,0 +1,148 @@
+"""Sync Garmin Index scale weigh-ins into the "Health Metrics & Diet Log" Google Sheet.
+
+Credentials are read from environment variables, never from this file:
+  GARMIN_EMAIL, GARMIN_PASSWORD   - Garmin Connect login
+  GOOGLE_JSON_PATH (optional)     - service account JSON (default /config/google_creds.json)
+"""
+
+import os
+import sys
+import datetime
+import zoneinfo
+
+from garminconnect import Garmin
+import gspread
+from google.oauth2.service_account import Credentials
+
+# 1. Garmin credentials (from the environment)
+GARMIN_EMAIL = os.environ.get("GARMIN_EMAIL")
+GARMIN_PASSWORD = os.environ.get("GARMIN_PASSWORD")
+
+# 2. Google Sheets setup
+GOOGLE_JSON_PATH = os.environ.get("GOOGLE_JSON_PATH", "/config/google_creds.json")
+SPREADSHEET_NAME = "Health Metrics & Diet Log"
+WORKSHEET_NAME = "Weight"
+
+LOCAL_TZ = zoneinfo.ZoneInfo("Europe/London")
+DAYS_BACK = 3  # today plus the previous 3 days
+
+# Map Python's .weekday() index numbers to the protocol labels
+ROUTINE_MAP = {
+    0: "Fast Day 1",  # Monday
+    1: "Fast Day 2",  # Tuesday
+    2: "Eating",      # Wednesday
+    3: "Fasting",     # Thursday
+    4: "Eating",      # Friday
+    5: "Fasting",     # Saturday
+    6: "Eating",      # Sunday
+}
+
+
+def metric(log, key, divisor=1):
+    """Rounded value, or a blank cell if Garmin didn't send one."""
+    value = log.get(key)
+    if value is None:
+        return ""
+    return round(value / divisor, 1)
+
+
+def main():
+    if not GARMIN_EMAIL or not GARMIN_PASSWORD:
+        print("Error: set GARMIN_EMAIL and GARMIN_PASSWORD environment variables.")
+        sys.exit(1)
+
+    try:
+        # Drive scope is needed to open the spreadsheet by name
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+
+        creds = Credentials.from_service_account_file(GOOGLE_JSON_PATH, scopes=scopes)
+        gc = gspread.authorize(creds)
+        sheet = gc.open(SPREADSHEET_NAME).worksheet(WORKSHEET_NAME)
+        existing_timestamps = sheet.col_values(1)
+
+        client = Garmin(GARMIN_EMAIL, GARMIN_PASSWORD)
+        client.login()
+
+        appended_any = False
+        today = datetime.date.today()
+
+        for i in range(DAYS_BACK, -1, -1):
+            check_date = today - datetime.timedelta(days=i)
+            weight_data = client.get_daily_weigh_ins(check_date.isoformat())
+            records = weight_data.get("dateWeightList", [])
+
+            for log in records:
+                # Garmin timestamps are UTC; convert to London time (handles BST/GMT)
+                utc_dt = datetime.datetime.fromtimestamp(
+                    log["timestampGMT"] / 1000.0, tz=datetime.timezone.utc
+                )
+                local_dt = utc_dt.astimezone(LOCAL_TZ)
+                standard_timestamp = local_dt.strftime("%Y-%m-%d %H:%M:%S")
+                routine_text = ROUTINE_MAP[local_dt.weekday()]
+
+                weight_kg = metric(log, "weight", 1000)
+                if weight_kg == "":
+                    continue  # no usable reading
+                bmi = metric(log, "bmi")
+                body_fat = metric(log, "bodyFat")
+                muscle_mass_kg = metric(log, "muscleMass", 1000)
+                bone_mass_kg = metric(log, "boneMass", 1000)
+                body_water = metric(log, "bodyWater")
+
+                # One row per day: match on day/month/year as the sheet displays it
+                display_match_str = local_dt.strftime("%d/%b/%y")
+                is_duplicate = any(
+                    display_match_str in existing or standard_timestamp in existing
+                    for existing in existing_timestamps
+                )
+
+                if is_duplicate:
+                    print(f"Entry for {local_dt.strftime('%d/%b/%y %H:%M')} already exists in sheet.")
+                    continue
+
+                new_row = len(existing_timestamps) + 1
+
+                # Write A:B and D:I separately so the formula in column C is never touched
+                sheet.batch_update(
+                    [
+                        {
+                            "range": f"A{new_row}:B{new_row}",
+                            "values": [[standard_timestamp, weight_kg]],
+                        },
+                        {
+                            "range": f"D{new_row}:I{new_row}",
+                            "values": [[bmi, body_fat, muscle_mass_kg,
+                                        bone_mass_kg, body_water, routine_text]],
+                        },
+                    ],
+                    value_input_option="USER_ENTERED",
+                )
+                print(f"Wrote row {new_row} for {standard_timestamp}")
+
+                # Copy formatting, and the column C formula, from the row above
+                if new_row > 2:
+                    prev = new_row - 1
+                    try:
+                        sheet.copy_range(f"A{prev}:I{prev}", f"A{new_row}:I{new_row}",
+                                         paste_type="PASTE_FORMAT")
+                        sheet.copy_range(f"C{prev}", f"C{new_row}",
+                                         paste_type="PASTE_FORMULA")
+                    except Exception as fmt_err:
+                        print(f"Note: format/formula copy skipped: {fmt_err}")
+
+                existing_timestamps.append(standard_timestamp)
+                appended_any = True
+
+        if not appended_any:
+            print("All recent logs are already present in the spreadsheet.")
+
+    except Exception as e:
+        print(f"Error executing sync: {e}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
