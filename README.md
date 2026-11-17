@@ -2,11 +2,11 @@
 
 A Python script that copies weigh-ins from Garmin Connect, such as those from a Garmin Index scale, into a Google Sheet.
 
-Each run logs in to Garmin Connect, fetches weigh-ins for today and the previous three days, and adds any missing days to the spreadsheet tab you choose in your settings. It's safe to run repeatedly, because days already in the sheet are skipped.
+Each run logs in to Garmin Connect, fetches weigh-ins for today and the previous three days, and adds any missing days to the spreadsheet tab you choose in your settings. It's safe to run repeatedly, because days that already have a weight are skipped.
 
 ## What it writes
 
-Each new row uses these columns:
+Each row it writes uses these columns:
 
 | Column | Value |
 |---|---|
@@ -20,7 +20,7 @@ Each new row uses these columns:
 | H | Body water (%) |
 | I | Routine label for that weekday (see below) |
 
-Values are rounded to one decimal place. If Garmin doesn't send a value, its cell is left blank, and readings with no weight are ignored. The formatting of columns A to I is also copied from the row above.
+Values are rounded to one decimal place. If Garmin doesn't send a value, its cell is left blank, and readings with no weight are ignored. When the script adds or inserts a row, it copies the formatting of columns A to I from the row above. When it fills a placeholder row, it keeps that row's formatting and only sets the date-and-time format of column A.
 
 ### Routine labels
 
@@ -38,7 +38,13 @@ To change the labels, edit `ROUTINE_MAP` in `garmin_sync.py`.
 
 ### One row per day
 
-The sync keeps the first weigh-in of each day, based on London time. Any later weigh-in that day is skipped, including one that arrives on a later run. If a day's first reading is missed, for example because it hadn't reached Garmin Connect yet, a later reading that day may be the one recorded.
+The sync keeps the first weigh-in of each day, based on London time. For each weigh-in it looks for that day in column A:
+
+- **A row for that day with a weight in column B:** the weigh-in is skipped.
+- **A row for that day with column B empty:** the weigh-in is written into that row. This lets you type future dates into column A to plan ahead, and the script fills them in as the days arrive.
+- **No row for that day:** a new row is inserted before the first later date, or added at the end if there isn't one. The change formula in column C of the row below is updated to point at the new row.
+
+Any later weigh-in on a day that already has a weight is skipped, including one that arrives on a later run. If a day's first reading is missed, for example because it hadn't reached Garmin Connect yet, a later reading that day may be the one recorded.
 
 Because it only looks back three days, a weigh-in older than that isn't added if the script wasn't run in time.
 

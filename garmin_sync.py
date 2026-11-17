@@ -1,7 +1,11 @@
 """Sync Garmin Index scale weigh-ins into a Google Sheet.
 
-Writes one row per day: the first weigh-in of that day (London time). Later
-weigh-ins on a day that already has a row are skipped.
+Writes one row per day: the first weigh-in of that day (London time).
+
+If column A already has a row for that day with no weight in column B (for
+example future dates typed in to plan ahead), the reading is written into that
+row. If the day's row already has a weight, the reading is skipped. If the day
+has no row, a new one is inserted in date order (or added at the end).
 
 Settings are read from environment variables or a .env file, never from this file:
   GARMIN_EMAIL, GARMIN_PASSWORD   - Garmin Connect login
@@ -46,6 +50,10 @@ ROUTINE_MAP = {
     6: "Eating",      # Sunday
 }
 
+# Number format applied to column A when filling a placeholder row, so the time
+# shows the same way as in rows the script adds
+TIMESTAMP_PATTERN = "dd/mmm/yy hh:mm"
+
 # Google Sheets stores dates as a count of days since this date
 SHEET_EPOCH = datetime.date(1899, 12, 30)
 
@@ -71,6 +79,12 @@ def sheet_day(cell):
         except ValueError:
             pass
     return None
+
+
+def change_formula(row):
+    """Column C formula: change in weight since the row above."""
+    prev = row - 1
+    return f'=IF(ISBLANK(B{prev}:B{row}),"",B{row}-B{prev})'
 
 
 def metric(log, key, divisor=1):
@@ -100,14 +114,24 @@ def main():
 
         # Read the stored values, so the check doesn't depend on how the sheet displays dates
         column_a = sheet.col_values(1, value_render_option="UNFORMATTED_VALUE")
-        next_row = len(column_a) + 1
-        existing_days = set()
+        column_b = sheet.col_values(2, value_render_option="UNFORMATTED_VALUE")
+        last_row = len(column_a)
+
+        dated_rows = []        # (row, day) for every row with a date in column A
+        filled_days = set()    # days that already have a weight
+        placeholders = {}      # day -> first row for that day with no weight yet
         for row, cell in enumerate(column_a, start=1):
             day = sheet_day(cell)
-            if day:
-                existing_days.add(day)
-            elif cell not in ("", None) and row > 1:
-                print(f"Warning: couldn't read a date in cell A{row}: {cell!r}")
+            if not day:
+                if cell not in ("", None) and row > 1:
+                    print(f"Warning: couldn't read a date in cell A{row}: {cell!r}")
+                continue
+            dated_rows.append((row, day))
+            weight = column_b[row - 1] if row - 1 < len(column_b) else ""
+            if weight not in ("", None):
+                filled_days.add(day)
+            else:
+                placeholders.setdefault(day, row)
 
         client = Garmin(GARMIN_EMAIL, GARMIN_PASSWORD)
         client.login()
@@ -139,43 +163,65 @@ def main():
                 bone_mass_kg = metric(log, "boneMass", 1000)
                 body_water = metric(log, "bodyWater")
 
+                day = local_dt.date()
+                label = local_dt.strftime('%d/%b/%y %H:%M')
+
                 # One row per day: keep the first reading, skip any others
-                if local_dt.date() in existing_days:
-                    print(f"Skipping {local_dt.strftime('%d/%b/%y %H:%M')}: that day already has a row.")
+                if day in filled_days:
+                    print(f"Skipping {label}: that day already has a weight.")
                     continue
 
-                new_row = next_row
+                values = [[standard_timestamp, weight_kg, "",
+                           bmi, body_fat, muscle_mass_kg,
+                           bone_mass_kg, body_water, routine_text]]
+
+                if day in placeholders:
+                    # Fill the row that's already there, keeping its formatting
+                    row = placeholders.pop(day)
+                    action = "Filled"
+                else:
+                    # Insert before the first later date, or add at the end
+                    later = [r for r, d in dated_rows if d > day]
+                    if later:
+                        row = min(later)
+                        sheet.insert_row([""], index=row, inherit_from_before=True)
+                        # Everything from that row down moves down one
+                        dated_rows = [(r + 1 if r >= row else r, d) for r, d in dated_rows]
+                        placeholders = {d: (r + 1 if r >= row else r)
+                                        for d, r in placeholders.items()}
+                        last_row += 1
+                        action = "Inserted"
+                    else:
+                        row = last_row + 1
+                        last_row = row
+                        action = "Wrote"
+                    dated_rows.append((row, day))
 
                 # Column C: change in weight since the row above. Row 2 has no earlier
                 # weight to compare with, only the header, so its cell stays empty.
-                weight_change = ""
-                if new_row > 2:
-                    prev = new_row - 1
-                    weight_change = f'=IF(ISBLANK(B{prev}:B{new_row}),"",B{new_row}-B{prev})'
+                values[0][2] = change_formula(row) if row > 2 else ""
 
-                sheet.batch_update(
-                    [
-                        {
-                            "range": f"A{new_row}:I{new_row}",
-                            "values": [[standard_timestamp, weight_kg, weight_change,
-                                        bmi, body_fat, muscle_mass_kg,
-                                        bone_mass_kg, body_water, routine_text]],
-                        },
-                    ],
-                    value_input_option="USER_ENTERED",
-                )
-                print(f"Wrote row {new_row} for {standard_timestamp}")
+                updates = [{"range": f"A{row}:I{row}", "values": values}]
+                # Keep the next row's change formula pointing at this row
+                if row < last_row:
+                    updates.append({"range": f"C{row + 1}",
+                                    "values": [[change_formula(row + 1)]]})
+                sheet.batch_update(updates, value_input_option="USER_ENTERED")
+                print(f"{action} row {row} for {standard_timestamp}")
 
-                # Copy formatting from the row above
-                if new_row > 2:
-                    try:
-                        sheet.copy_range(f"A{prev}:I{prev}", f"A{new_row}:I{new_row}",
+                try:
+                    if action == "Filled":
+                        # Show the time like other rows, without touching colours or shading
+                        sheet.format(f"A{row}", {"numberFormat": {
+                            "type": "DATE_TIME", "pattern": TIMESTAMP_PATTERN}})
+                    elif row > 2:
+                        # Copy formatting from the row above
+                        sheet.copy_range(f"A{row - 1}:I{row - 1}", f"A{row}:I{row}",
                                          paste_type="PASTE_FORMAT")
-                    except Exception as fmt_err:
-                        print(f"Note: format copy skipped: {fmt_err}")
+                except Exception as fmt_err:
+                    print(f"Note: formatting skipped: {fmt_err}")
 
-                existing_days.add(local_dt.date())
-                next_row += 1
+                filled_days.add(day)
                 appended_any = True
 
         if not appended_any:
